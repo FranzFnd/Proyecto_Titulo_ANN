@@ -1,0 +1,128 @@
+
+clc; clear; close all;
+
+
+
+%Parametros
+H = 550; %cm Altura de la pila
+T = 44; %días, tiempo de simulación
+theta_ini = 0.14; %Humedad inicial (cm3/cm3)
+theta_s = 0.33; %Humedad de saturación (cm3/cm3)
+theta_r = 0; %Humedad resifual (cm3/cm3)
+dtheta = theta_s-theta_r;
+Ks = 170; % (cm/día) Conductividad hidráulica de saturación
+alpha = 0.035; %(1/cm) Parámetro VGM
+n = 2.267; %Parámetro VGM
+method = 2; %método VGM
+Dt = 1/24; %1/día Dt es por cada hora
+Dz = 10; %cm
+Nchi=55;%elementos finitos dentro de Chi
+Ntau=24;%elementos finitos dentro de tau
+
+%AGRUPACION DE PARAMETROS
+par_solid = [H,T,theta_ini,theta_s,theta_r,Ks];
+par_vg = [alpha,n,method];
+dim_model = [Dt,Dz];
+
+%vectores de elementos de z y t
+Z_vect = 0:Dz:H;
+T_vect = 0:Dt:T;
+
+%Generacion de datos
+[S_m,K_m,D_m] = Sim_CN_VG(par_solid,par_vg,dim_model);
+Se_m_full=S_m;
+K_m_full=K_m;
+D_m_full=D_m;
+
+%Parametrizacion adimencionalizada
+Dt = 1;%dia
+tau = linspace(0,1,Ntau);
+chi = linspace(0,1,Nchi);
+Dtau=1/Ntau;
+Dchi=1/Nchi;
+Param = [Dt;Dtau;H;Dchi;dtheta];
+Q_0_vect = [12;19;19;0;0;0;12;32;36;39;46;27;23;24;27;30;29;28;28;27;36;35;26;26;26;25;22;26;24;24;26;22;22;25;27;27;23;19;20;19;16;17;21;30];
+
+%Determinacion de vectores para tau y chi
+
+chi_vect = 0:Dchi:1;
+Matriz_v_tau = cell(1,T);
+tau_vect_1d = 0:Dtau:1;
+for i = 1:T
+    if i==T
+        Matriz_v_tau{i}=tau_vect_1d;
+    else
+        Matriz_v_tau{i} = tau_vect_1d(:,1:end-1);
+    end
+end
+tau_vect = horzcat(Matriz_v_tau{:});
+
+%Creacion de celda para guardar el total de los Se simulados por cada paso
+%del dia
+Matriz = cell(1,T);
+
+Se_sim = zeros(Nchi+1,Ntau+1);%se genera una matriz Nchi a Ntau para simular cada dia
+
+Se_ini = S_theta(theta_ini,theta_r,theta_s,0);
+Se_ini_v = ones(Nchi+1,1).*Se_ini;
+Se_sim(:, 1) = Se_ini_v; % Condición de borde inicial
+
+    A = 308; %área de irrigación m2
+    if Dtau <= ((H^2)/(2*(Dt*24)))*(Dchi^2) %Criterio de estabilidad CFL
+        for k = 1:T
+            q0 = Q_0_vect(k,1); %m3/d Caudal de ingreso (VAR DE DECISION) se cambia el caudal en cada día (cada vez que pasa el ciclo for superior
+            for j = 1:Ntau %paso del tiempo en días
+                Rj = (q0/A)*100; % tasa de riego en (cm/d)
+        
+ 
+
+                Se_prev = Se_sim(:, j);%se calcula el x del momento k con el x del momeno k-1 osea el x previo
+                
+                %Para la prueba se usa van genuchten modificado
+                h = h_theta(Se_prev,n,alpha,Nchi,method);
+                K_prev = K_theta(Se_prev,Ks,n,Nchi,method);
+                dtheta_dh = dtheta_dh_theta(h,theta_s,theta_r,n,alpha,Nchi,method);
+                D_prev = D_theta(K_prev,dtheta_dh,Nchi);
+    
+                Se_sim(:, j+1) = euler_Forward(Se_prev, D_prev, K_prev, Rj, Param);%aqui va la funcion del modelo
+            end
+            %Luego se guardan los Se simulados en el dia K correspondiente
+            %y se reinicia la matriz Se_sim para el siguiente dia, tomando
+            %como datos iniciales los ultimos del dia anterior para todo z
+            if k == T
+                Matriz{k} = Se_sim;
+            else
+                Matriz{k} = Se_sim(:,1:Ntau);
+                Se_ini_k = Se_sim(:,end);
+                Se_sim = zeros(Nchi+1,Ntau+1);
+                Se_ini_k = ones(Nchi+1,1).*Se_ini_k;
+                Se_sim(:, 1) = Se_ini_k; % Condición inicial nuevo Se para k+1
+            end
+         
+        end
+        Se_full = horzcat(Matriz{:}); %Finalmente se concatenan horizontalmente las matrices de cada dia para formar el perfil completo
+    else
+        disp('Condicion de estabilidad no cumplida')
+    end
+
+    %Problema hasta ahora: Haparecen numeros complejos dado que en
+    %el segundo dia y cuando Se en el momento inicial supera los 0.6, los
+    %siguentes dos valores son 0.1 aprox y -0.1 aprox, provocando que en la
+    %funcion h_theta se genere un numero comlpejo, que se propaga al resto
+    %de la simulacion. Esto ocurre aproximadamente en 
+
+    figure(1)
+hold on
+mesh(tau_vect, chi_vect, Se_full)
+xlabel('Tau (-)')
+ylabel('chi (-)')
+zlabel('Se (-)')
+title('Evolución del perfil de humedad para R dado')
+
+    figure(2)
+hold on
+mesh(T_vect, Z_vect, Se_m_full)
+xlabel('tiempo (d)')
+ylabel('profundidad (m)')
+zlabel('humedad (-)')
+title('Evolución del perfil de humedad para R dado')
